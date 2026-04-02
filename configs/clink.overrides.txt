@@ -1,0 +1,3 @@
+clink.logo=none
+autosuggest.enable=true
+autosuggest.hint=true
