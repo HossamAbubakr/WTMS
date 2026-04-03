@@ -150,38 +150,66 @@ function Invoke-External {
   }
 
   Write-Log "RUN  : $commandText"
-  $output = & $FilePath @ArgumentList 2>&1
-  $exitCode = $LASTEXITCODE
-  $outputText = ($output | Out-String)
 
-  if ($output) {
-    foreach ($line in ($outputText -split "`r?`n")) {
+  $stdoutPath = Join-Path $env:TEMP ("wtms-stdout-{0}.log" -f ([guid]::NewGuid().ToString('N')))
+  $stderrPath = Join-Path $env:TEMP ("wtms-stderr-{0}.log" -f ([guid]::NewGuid().ToString('N')))
+
+  try {
+    $proc = Start-Process `
+      -FilePath $FilePath `
+      -ArgumentList $ArgumentList `
+      -NoNewWindow `
+      -Wait `
+      -PassThru `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath
+
+    $stdoutLines = @()
+    $stderrLines = @()
+
+    if (Test-Path -LiteralPath $stdoutPath) {
+      $stdoutLines = Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $stderrPath) {
+      $stderrLines = Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+    }
+
+    $allLines = @($stdoutLines) + @($stderrLines)
+    $outputText = ($allLines | Out-String)
+    $exitCode = $proc.ExitCode
+
+    foreach ($line in $allLines) {
       if (-not [string]::IsNullOrWhiteSpace($line)) {
+        Write-Host $line
         Write-Log "OUT  : $line"
       }
     }
-  }
 
-  Write-Log "EXIT : $exitCode ($What)"
+    Write-Log "EXIT : $exitCode ($What)"
 
-  if ($exitCode -eq 0) {
-    return
-  }
-
-  if ($IgnoreExitCodes -contains $exitCode) {
-    Write-WarnMsg "$What returned exit code $exitCode; continuing by policy."
-    return
-  }
-
-  foreach ($pattern in $SuccessPatterns) {
-    if ($outputText -match $pattern) {
-      Write-WarnMsg "$What reported an already-applied state; continuing."
-      Write-Log "INFO : Matched benign pattern: $pattern"
+    if ($exitCode -eq 0) {
       return
     }
-  }
 
-  Fail "$What failed with exit code $exitCode."
+    if ($IgnoreExitCodes -contains $exitCode) {
+      Write-WarnMsg "$What returned exit code $exitCode; continuing by policy."
+      return
+    }
+
+    foreach ($pattern in $SuccessPatterns) {
+      if ($outputText -match $pattern) {
+        Write-WarnMsg "$What reported an already-applied state; continuing."
+        Write-Log "INFO : Matched benign pattern: $pattern"
+        return
+      }
+    }
+
+    Fail "$What failed with exit code $exitCode."
+  }
+  finally {
+    Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Refresh-ProcessPathFromRegistry {
